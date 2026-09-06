@@ -1,0 +1,313 @@
+name: Verify G1 Motion Lab
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Explicit bash enables pipefail, so preserving output with tee cannot hide a failed test.
+    shell: bash
+
+concurrency:
+  group: g1-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  data-contracts:
+    name: Data and retarget contracts / Python 3.12
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate canonical data and package guards
+        run: |
+          mkdir -p artifacts/contracts
+          python3 scripts/prepare-data.py --check | tee artifacts/contracts/canonical.log
+          python3 -m unittest discover -s tests/data -p 'test_*.py' -v 2>&1 \
+            | tee artifacts/contracts/package-tests.log
+
+      - name: Install isolated contract-test dependencies
+        run: |
+          python3.12 -m venv "${RUNNER_TEMP}/g1-contract-tests"
+          "${RUNNER_TEMP}/g1-contract-tests/bin/python" -m pip install \
+            -r tools/g1-retarget/requirements.txt
+          "${RUNNER_TEMP}/g1-contract-tests/bin/python" -m pip check
+
+      - name: Test source parser, velocity paths and guarded exports without solving motion
+        run: |
+          "${RUNNER_TEMP}/g1-contract-tests/bin/python" -m unittest discover \
+            -s tools/g1-retarget/preflight -p 'test_*.py' -v 2>&1 \
+            | tee artifacts/contracts/preflight-tests.log
+          "${RUNNER_TEMP}/g1-contract-tests/bin/python" -m unittest discover \
+            -s tools/g1-retarget/retarget -p 'test_*.py' -v 2>&1 \
+            | tee artifacts/contracts/retarget-tests.log
+
+      - name: Preserve contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-contracts
+          path: artifacts/contracts
+          if-no-files-found: warn
+          retention-days: 7
+
+  openframeworks-macos:
+    name: openFrameworks 0.12.1 / macOS build
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      OF_URL: https://github.com/openframeworks/openFrameworks/releases/download/0.12.1/of_v0.12.1_osx_release.tar.gz
+      OF_SHA256: e4a2dd6e75805320aac905f9f82f7b85e67a8b799137d47f35d40f7c4c195c9b
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate canonical data and application packaging
+        run: |
+          mkdir -p artifacts/openframeworks-macos
+          python3 scripts/prepare-data.py --check | tee artifacts/openframeworks-macos/canonical.log
+          python3 -m unittest discover -s tests/openframeworks -p 'test_*.py' -v 2>&1 \
+            | tee artifacts/openframeworks-macos/packaging-tests.log
+
+      - name: Cache openFrameworks 0.12.1
+        id: cache-openframeworks
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/of_v0.12.1_osx_release
+          key: g1-openframeworks-0.12.1-macos-${{ runner.arch }}-e4a2dd6e7580
+
+      - name: Download checksum-verified openFrameworks release
+        if: steps.cache-openframeworks.outputs.cache-hit != 'true'
+        run: |
+          OF_ARCHIVE="${RUNNER_TEMP}/of_v0.12.1_osx_release.tar.gz"
+          curl --fail --location --retry 3 --output "$OF_ARCHIVE" "$OF_URL"
+          echo "$OF_SHA256  $OF_ARCHIVE" | shasum --algorithm 256 --check
+          tar --extract --gzip --file "$OF_ARCHIVE" --directory "${RUNNER_TEMP}"
+
+      - name: Build the standalone G1 application
+        run: |
+          JOBS=2 ./scripts/build-openframeworks.sh "${RUNNER_TEMP}/of_v0.12.1_osx_release" 2>&1 \
+            | tee artifacts/openframeworks-macos/build.log
+
+      - name: Preserve macOS build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openframeworks-macos
+          path: artifacts/openframeworks-macos
+          if-no-files-found: warn
+          retention-days: 7
+
+  openframeworks-linux:
+    name: openFrameworks 0.12.1 / Jammy Mesa rendering
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Preserve the dependency-isolated Jammy environment used by the original verified viewer.
+    container:
+      image: ubuntu:22.04@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc
+    defaults:
+      run:
+        shell: bash
+    env:
+      OF_URL: https://github.com/openframeworks/openFrameworks/releases/download/0.12.1/of_v0.12.1_linux64_gcc6_release.tar.gz
+      OF_SHA256: d6c1dcab777665b2aa63e5e3d9122cc116f096b3421db3493f795a621b399c63
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+    steps:
+      - name: Bootstrap clean Ubuntu container
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            ca-certificates curl git sudo zstd lsb-release pkg-config python3
+          # Explicit GStreamer prerequisite avoids the hosted-runner SDK conflict.
+          apt-get install --yes --no-install-recommends libunwind-dev
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate canonical data and packaging before compilation
+        run: |
+          mkdir -p artifacts/openframeworks-linux
+          python3 scripts/prepare-data.py --check | tee artifacts/openframeworks-linux/canonical.log
+          python3 -m unittest discover -s tests/openframeworks -p 'test_*.py' -v 2>&1 \
+            | tee artifacts/openframeworks-linux/packaging-tests.log
+          apt-cache policy libunwind-dev libunwind8 libgstreamer1.0-dev \
+            | tee artifacts/openframeworks-linux/dependency-policy.log
+
+      - name: Cache openFrameworks 0.12.1
+        id: cache-openframeworks
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/of_v0.12.1_linux64_gcc6_release
+          key: g1-openframeworks-0.12.1-jammy-2edbbc5dc405-${{ runner.arch }}-d6c1dcab7776
+
+      - name: Download checksum-verified openFrameworks release
+        if: steps.cache-openframeworks.outputs.cache-hit != 'true'
+        run: |
+          OF_ARCHIVE="${RUNNER_TEMP}/of_v0.12.1_linux64_gcc6_release.tar.gz"
+          curl --fail --location --retry 3 --output "$OF_ARCHIVE" "$OF_URL"
+          echo "$OF_SHA256  $OF_ARCHIVE" | sha256sum --check
+          tar --extract --gzip --file "$OF_ARCHIVE" --directory "${RUNNER_TEMP}"
+
+      - name: Install pinned-release Ubuntu dependencies and software OpenGL
+        run: |
+          sudo env DEBIAN_FRONTEND=noninteractive bash \
+            "${RUNNER_TEMP}/of_v0.12.1_linux64_gcc6_release/scripts/linux/ubuntu/install_dependencies.sh" -y
+          sudo apt-get install --yes --no-install-recommends xvfb xauth mesa-utils libgl1-mesa-dri
+
+      - name: Build the standalone G1 application
+        run: |
+          JOBS=2 ./scripts/build-openframeworks.sh "${RUNNER_TEMP}/of_v0.12.1_linux64_gcc6_release" 2>&1 \
+            | tee artifacts/openframeworks-linux/build.log
+
+      - name: Render four G1 views and reject 22 invalid inputs
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1600x1000x24 +extension GLX -nolisten tcp" \
+            bash -euo pipefail -c '
+              glxinfo -B | tee artifacts/openframeworks-linux/opengl-context.log
+              grep -qi llvmpipe artifacts/openframeworks-linux/opengl-context.log
+              ./scripts/verify-openframeworks.sh "${GITHUB_WORKSPACE}/artifacts/openframeworks-linux" \
+                2>&1 | tee artifacts/openframeworks-linux/suite.log
+            '
+
+      - name: Preserve Mesa rendering evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openframeworks-linux
+          path: artifacts/openframeworks-linux
+          if-no-files-found: warn
+          retention-days: 7
+
+  processing-linux:
+    name: Processing 4.5.6 / Java 17 / Mesa rendering
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate canonical data
+        run: |
+          mkdir -p artifacts/processing
+          python3 scripts/prepare-data.py --check | tee artifacts/processing/canonical.log
+
+      - name: Set up Java 17
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "17.0.20+101"
+
+      - name: Install software OpenGL and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb xauth mesa-utils libgl1-mesa-dri unzip
+
+      - name: Restore Processing 4.5.6 cache
+        id: processing-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/processing-4.5.6
+          key: processing-4.5.6-linux-x64-ddb816ca
+
+      - name: Download checksum-verified Processing 4.5.6
+        if: steps.processing-cache.outputs.cache-hit != 'true'
+        env:
+          PROCESSING_URL: https://github.com/processing/processing4/releases/download/processing-1434-4.5.6/processing-4.5.6-linux-x64-portable.zip
+          PROCESSING_SHA256: ddb816ca2c02e862a5dcf22b96bb4f81f412c4878673752b36837a7770970a6c
+        run: |
+          curl --fail --location --retry 3 --output "${RUNNER_TEMP}/processing.zip" "$PROCESSING_URL"
+          echo "$PROCESSING_SHA256  ${RUNNER_TEMP}/processing.zip" | sha256sum --check
+          mkdir -p "${RUNNER_TEMP}/processing-4.5.6"
+          unzip -q "${RUNNER_TEMP}/processing.zip" -d "${RUNNER_TEMP}/processing-4.5.6"
+
+      - name: Test exact Java interpolation; render five G1 views; reject 20 invalid inputs
+        run: |
+          PROCESSING_BIN=$(find "${RUNNER_TEMP}/processing-4.5.6" -type f \( -name processing -o -name Processing \) -print -quit)
+          test -n "$PROCESSING_BIN"
+          chmod +x "$PROCESSING_BIN"
+          export PROCESSING_BIN
+          xvfb-run --auto-servernum --server-args="-screen 0 1600x1000x24 +extension GLX -nolisten tcp" \
+            bash -euo pipefail -c '
+              glxinfo -B | tee artifacts/processing/opengl-context.log
+              grep -qi llvmpipe artifacts/processing/opengl-context.log
+              ./scripts/verify-processing.sh "$PROCESSING_BIN" "${GITHUB_WORKSPACE}/artifacts/processing" \
+                2>&1 | tee artifacts/processing/suite.log
+            '
+
+      - name: Preserve Processing captures and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: processing-linux
+          path: |
+            artifacts/processing/**/*.png
+            artifacts/processing/**/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  python-linux:
+    name: Python 3.12 viewer / Mesa rendering
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate canonical data
+        run: |
+          mkdir -p artifacts/python
+          python3 scripts/prepare-data.py --check | tee artifacts/python/canonical.log
+
+      - name: Install software OpenGL and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            xvfb xauth mesa-utils libgl1-mesa-dri libegl1 libglfw3 fonts-dejavu-core
+
+      - name: Install the locked lightweight viewer environment
+        run: |
+          python3.12 -m venv "${RUNNER_TEMP}/g1-uv"
+          "${RUNNER_TEMP}/g1-uv/bin/python" -m pip install uv==0.11.28
+          "${RUNNER_TEMP}/g1-uv/bin/uv" sync --frozen --project examples/python --python 3.12
+          "${RUNNER_TEMP}/g1-uv/bin/uv" pip check --python examples/python/.venv/bin/python
+
+      - name: Test and render the actual Python viewer with software Mesa
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24 +extension GLX +render -noreset -nolisten tcp" \
+            bash -euo pipefail -c '
+              glxinfo -B | tee artifacts/python/opengl-context.log
+              grep -qi llvmpipe artifacts/python/opengl-context.log
+              bash scripts/verify-python.sh "${GITHUB_WORKSPACE}/artifacts/python" \
+                2>&1 | tee artifacts/python/suite.log
+            '
+
+      - name: Preserve Python viewer captures, metrics and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-linux
+          path: artifacts/python
+          if-no-files-found: warn
+          retention-days: 7

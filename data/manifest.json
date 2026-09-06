@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "source_commit": "71c0a6363a5f504aa3ecc190fcd3067b3fc2fadf",
+  "files": [
+    {
+      "path": "reference/MODEL-LICENSE",
+      "bytes": 1537,
+      "sha256": "98335465f43a20b5850e4651db6e74c4aa1e9fc8e8813d38f345178045c0da50"
+    },
+    {
+      "path": "reference/g1-model.json",
+      "bytes": 2723127,
+      "sha256": "5feab98dfbbaed02b8f77d16efc0f11178f375fa81d530b9c6d9657d5f051e02"
+    },
+    {
+      "path": "reference/g1-motion.json",
+      "bytes": 10186706,
+      "sha256": "e0df98198358ff775fb68a9caf7a39693cf219bb1b24b9cc8a5bb6df4087a42e"
+    },
+    {
+      "path": "reference/pose_retarget_qa.json",
+      "bytes": 10630,
+      "sha256": "c04260f03762094faaeadcd4e07ebdbb01e19d8468ebd64d85c10af7110414ea"
+    },
+    {
+      "path": "reference/provenance.json",
+      "bytes": 6323,
+      "sha256": "eb93e034f0d652eb2eb4e01222c519950a85e72057066e576d5f626ee862b023"
+    },
+    {
+      "path": "source/A_test.bvh",
+      "bytes": 928682,
+      "sha256": "bb53e8e80491830b5ad1ae2a649d44aa7c65e683161d3b456c9279a533ec563e"
+    },
+    {
+      "path": "source/B_test.bvh",
+      "bytes": 919836,
+      "sha256": "74811741939eaf3ff7e41336ed1bacc5f287879d58dc61d1d738d1c69df7725c"
+    },
+    {
+      "path": "source/C_test.bvh",
+      "bytes": 929953,
+      "sha256": "7d99f23d74a241a7ce2cb3c12004b6b9951866c7e65fa0d1150ee6e39435b469"
+    }
+  ]
+}
