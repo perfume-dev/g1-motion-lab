@@ -284,7 +284,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            xvfb xauth mesa-utils libgl1-mesa-dri libegl1 libglfw3 fonts-dejavu-core
+            xvfb xauth mesa-utils libgl1-mesa-dri libgl-dev libegl1 libglfw3 fonts-dejavu-core
 
       - name: Install the locked lightweight viewer environment
         run: |

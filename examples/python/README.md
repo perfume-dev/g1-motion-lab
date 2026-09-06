@@ -48,13 +48,16 @@ On Linux CI with Mesa, install system GLFW/OpenGL prerequisites and run under an
 
 ```sh
 # Ubuntu system packages (CI provisioning, not Python dependencies):
-# libgl1-mesa-dri libglx-mesa0 libglfw3 libxkbcommon0 xvfb xauth
+# libgl1-mesa-dri libglx-mesa0 libgl-dev libglfw3 libxkbcommon0 xvfb xauth
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
   -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
   bash scripts/verify-python.sh
 ```
 
 macOS graphics evidence is recorded in [VALIDATION.md](VALIDATION.md). Linux support is designed for Mesa/GLX and must be judged by its own CI result, not inferred from macOS.
+
+The Linux `libgl-dev` package supplies the unversioned `libGL.so` name used by
+glcontext. Having a working `glxinfo` with only `libGL.so.1` is not sufficient.
 
 ## Implementation / scope
 
